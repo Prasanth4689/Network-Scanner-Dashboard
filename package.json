@@ -1,0 +1,14 @@
+{
+  "name": "network-scanner-dashboard",
+  "version": "1.0.0",
+  "description": "A premium, real-time local network scanner dashboard with Express backend and glassmorphic UI.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ip": "^2.0.1",
+    "ping": "^0.4.4"
+  }
+}

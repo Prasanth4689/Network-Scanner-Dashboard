@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NetPulse // Premium Network Scanner</title>
+  <!-- Google Fonts: Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Lucide Icons CDN -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Background Ambient Glows -->
+  <div class="ambient-glow glow-1"></div>
+  <div class="ambient-glow glow-2"></div>
+
+  <div class="dashboard-container">
+    
+    <!-- Sidebar / Brand -->
+    <aside class="sidebar">
+      <div class="brand">
+        <i data-lucide="shield-alert" class="brand-icon"></i>
+        <h1>NetPulse</h1>
+        <span class="version">v1.2.0</span>
+      </div>
+      
+      <nav class="nav-links">
+        <button class="nav-btn active" data-tab="dashboard">
+          <i data-lucide="layout-dashboard"></i> Dashboard
+        </button>
+        <button class="nav-btn" data-tab="devices">
+          <i data-lucide="laptop"></i> Connected Devices
+        </button>
+        <button class="nav-btn" data-tab="topology">
+          <i data-lucide="git-branch"></i> Topology Map
+        </button>
+        <button class="nav-btn" data-tab="tools">
+          <i data-lucide="wrench"></i> Network Tools
+        </button>
+        <button class="nav-btn" data-tab="ports">
+          <i data-lucide="network"></i> Port Scanning
+        </button>
+      </nav>
+
+      <div class="scan-settings-panel">
+        <h3>Scanner Mode</h3>
+        <div class="toggle-container">
+          <span class="toggle-label">Simulator Mode</span>
+          <label class="switch">
+            <input type="checkbox" id="mock-toggle" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+        <p class="settings-desc">Simulator mode bypasses system ARP permissions and mocks realistic network activity.</p>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="status-indicator-container">
+          <span class="status-dot online"></span>
+          <span class="status-text">Backend Connected</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      
+      <!-- Top Bar -->
+      <header class="top-bar">
+        <div class="welcome">
+          <h2>Network Monitor</h2>
+          <p id="current-subnet">Scanning: Detecting local subnet...</p>
+        </div>
+        
+        <div class="action-group">
+          <button id="scan-btn" class="btn btn-primary">
+            <i data-lucide="play-circle" class="btn-icon"></i>
+            <span>Scan Network</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Dashboard Overview Tab -->
+      <section id="tab-dashboard" class="tab-content active">
+        <!-- Metric Cards Grid -->
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="card-header">
+              <span>ACTIVE DEVICES</span>
+              <i data-lucide="cpu" class="card-icon cyan"></i>
+            </div>
+            <div class="card-body">
+              <h3 id="metric-devices">--</h3>
+              <p class="trend positive"><i data-lucide="arrow-up-right"></i> Online on Subnet</p>
+            </div>
+          </div>
+          
+          <div class="metric-card">
+            <div class="card-header">
+              <span>AVG LATENCY</span>
+              <i data-lucide="activity" class="card-icon purple"></i>
+            </div>
+            <div class="card-body">
+              <h3 id="metric-latency">--</h3>
+              <p class="trend"><i data-lucide="gauge"></i> Milliseconds</p>
+            </div>
+          </div>
+
+          <div class="metric-card">
+            <div class="card-header">
+              <span>LOCAL INTERFACE</span>
+              <i data-lucide="info" class="card-icon pink"></i>
+            </div>
+            <div class="card-body">
+              <h3 id="metric-ip" class="ip-display">127.0.0.1</h3>
+              <p id="metric-subnet-mask" class="sub-label">255.255.255.0</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Charts Section -->
+        <div class="charts-grid-three">
+          <div class="chart-card">
+            <h3>Latency (ms)</h3>
+            <div class="chart-wrapper">
+              <canvas id="latencyChart"></canvas>
+            </div>
+          </div>
+          <div class="chart-card">
+            <h3>Bandwidth Monitor (Live KB/s)</h3>
+            <div class="chart-wrapper">
+              <canvas id="bandwidthChart"></canvas>
+            </div>
+          </div>
+          <div class="chart-card">
+            <h3>Manufacturer Share</h3>
+            <div class="chart-wrapper">
+              <canvas id="vendorChart"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- Discovered Devices Quick List -->
+        <div class="list-card">
+          <div class="list-header">
+            <h3>Active Subnet Devices</h3>
+            <div class="list-actions">
+              <span class="badge" id="device-count">0 Discovered</span>
+              <button id="export-csv-btn" class="btn btn-secondary" style="padding: 6px 12px; font-size: 0.8rem; border-radius: 8px;">
+                <i data-lucide="download" style="width: 14px; height: 14px; display: inline; vertical-align: middle;"></i> Export CSV
+              </button>
+              <button id="export-json-btn" class="btn btn-secondary" style="padding: 6px 12px; font-size: 0.8rem; border-radius: 8px;">
+                <i data-lucide="braces" style="width: 14px; height: 14px; display: inline; vertical-align: middle;"></i> Export JSON
+              </button>
+            </div>
+          </div>
+
+          <div class="device-toolbar" aria-label="Device list controls">
+            <label class="device-search">
+              <i data-lucide="search"></i>
+              <input id="device-search" type="search" placeholder="Search name, IP, MAC, or vendor">
+            </label>
+            <select id="device-status-filter" aria-label="Filter by status">
+              <option value="all">All statuses</option>
+              <option value="Active">Active</option>
+              <option value="Shielded">Shielded</option>
+            </select>
+            <select id="device-sort" aria-label="Sort devices">
+              <option value="ip">Sort: IP address</option>
+              <option value="latency">Sort: latency</option>
+              <option value="name">Sort: device name</option>
+            </select>
+          </div>
+          <div id="scan-alert" class="scan-alert hidden" role="status"></div>
+          
+          <div class="table-container">
+            <table class="device-table">
+              <thead>
+                <tr>
+                  <th>Device Info</th>
+                  <th>IP Address</th>
+                  <th>MAC Address</th>
+                  <th>Vendor</th>
+                  <th>Latency</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="device-table-body">
+                <tr>
+                  <td colspan="7" class="loading-state">
+                    <div class="empty-state">
+                      <i data-lucide="refresh-cw" class="spinner"></i>
+                      <p>Waiting for scan initialization...</p>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="history-card">
+          <div class="history-header">
+            <div>
+              <h3>Recent Scan History</h3>
+              <p>Stored locally in this browser. The last five scans are kept.</p>
+            </div>
+            <button id="clear-history-btn" class="btn btn-secondary" style="padding: 6px 12px; font-size: 0.8rem; border-radius: 8px;">Clear history</button>
+          </div>
+          <div id="scan-history" class="scan-history" aria-live="polite"></div>
+        </div>
+      </section>
+
+      <!-- Topology Map Tab -->
+      <section id="tab-topology" class="tab-content">
+        <div class="topology-card">
+          <div class="topology-header">
+            <h3>Network Nodes Topology</h3>
+            <p>Visual map showing relative latency and connectivity branches radiating from the gateway router node.</p>
+          </div>
+          <div class="topology-canvas-container">
+            <div id="topology-map" class="topology-map">
+              <!-- Dynamically populated nodes -->
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Port Scan Tab -->
+      <section id="tab-ports" class="tab-content">
+        <div class="port-scan-wrapper">
+          <div class="port-scan-form-card">
+            <h3>Trigger Socket Port Scan</h3>
+            <p>Scan standard service ports to audit security settings of devices on the subnet.</p>
+            
+            <div class="input-group" style="margin-bottom: 1rem;">
+              <label for="port-scan-target">Target IP Address</label>
+              <input type="text" id="port-scan-target" placeholder="e.g. 192.168.1.1" style="background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-color); border-radius: 12px; padding: 0.75rem 1rem; color: var(--text-primary); font-family: monospace; font-size: 1rem; outline: none;">
+            </div>
+
+            <div class="input-group" style="margin-bottom: 1rem;">
+              <label for="port-scan-list">Ports to Scan (Comma separated)</label>
+              <input type="text" id="port-scan-list" value="21,22,23,80,135,139,443,445,1433,3306,3389,8080" style="background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-color); border-radius: 12px; padding: 0.75rem 1rem; color: var(--text-primary); font-family: monospace; font-size: 1rem; outline: none;">
+            </div>
+
+            <div class="input-group" style="margin-bottom: 1.5rem;">
+              <label style="margin-bottom: 0.5rem;">Scan Presets</label>
+              <div class="preset-buttons" style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+                <button class="btn btn-secondary btn-preset" data-ports="80,443,8080" style="padding: 6px 12px; font-size: 0.8rem; border-radius: 8px;">Web Audit</button>
+                <button class="btn btn-secondary btn-preset" data-ports="22,23,3389" style="padding: 6px 12px; font-size: 0.8rem; border-radius: 8px;">Remote Access</button>
+                <button class="btn btn-secondary btn-preset" data-ports="1433,3306" style="padding: 6px 12px; font-size: 0.8rem; border-radius: 8px;">Databases</button>
+                <button class="btn btn-secondary btn-preset" data-ports="21,22,23,80,135,139,443,445,1433,3306,3389,8080" style="padding: 6px 12px; font-size: 0.8rem; border-radius: 8px;">All Ports</button>
+              </div>
+            </div>
+
+            <button id="port-scan-btn" class="btn btn-primary" style="width: 100%; justify-content: center;">Scan Ports</button>
+          </div>
+
+          <div id="port-results-container" class="port-results-card hidden">
+            <div class="results-header">
+              <h3>Port Scan Results for <span id="port-target-display">192.168.1.1</span></h3>
+              <span class="badge badge-success" id="open-ports-count">0 Open Ports</span>
+            </div>
+            
+            <div class="port-grid" id="port-results-grid">
+              <!-- Ports are dynamically rendered here -->
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Network Tools Tab -->
+      <section id="tab-tools" class="tab-content">
+        <div class="port-scan-wrapper">
+          <!-- Subnet Calculator Card -->
+          <div class="port-scan-form-card" style="height: fit-content;">
+            <h3>Subnet Range Calculator</h3>
+            <p>Calculate network address, broadcast address, and host availability boundaries using CIDR notations.</p>
+            
+            <div class="input-group" style="margin-bottom: 1rem;">
+              <label for="subnet-calc-ip">IP Address</label>
+              <input type="text" id="subnet-calc-ip" placeholder="e.g. 192.168.1.1" value="192.168.1.1" style="background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-color); border-radius: 12px; padding: 0.75rem 1rem; color: var(--text-primary); font-family: monospace; font-size: 1rem; outline: none;">
+            </div>
+
+            <div class="input-group" style="margin-bottom: 1.5rem;">
+              <label for="subnet-calc-mask">Subnet Mask (CIDR)</label>
+              <input type="number" id="subnet-calc-mask" placeholder="e.g. 24" value="24" min="1" max="32" style="background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-color); border-radius: 12px; padding: 0.75rem 1rem; color: var(--text-primary); font-family: monospace; font-size: 1rem; outline: none;">
+            </div>
+
+            <button id="subnet-calc-btn" class="btn btn-primary" style="width: 100%; justify-content: center;">Calculate Subnet</button>
+
+            <!-- Results container -->
+            <div id="subnet-results" class="hidden" style="margin-top: 1.5rem; border-top: 1px solid var(--border-color); padding-top: 1.25rem;">
+              <table style="width: 100%; font-size: 0.85rem; border-collapse: collapse; text-align: left;">
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding: 6px 0; color: var(--text-secondary);">Network ID:</td><td id="calc-net-id" style="font-family: monospace; font-weight: bold; text-align: right;">--</td></tr>
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding: 6px 0; color: var(--text-secondary);">Broadcast:</td><td id="calc-broadcast" style="font-family: monospace; font-weight: bold; text-align: right;">--</td></tr>
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding: 6px 0; color: var(--text-secondary);">First Usable:</td><td id="calc-first-ip" style="font-family: monospace; font-weight: bold; text-align: right;">--</td></tr>
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);"><td style="padding: 6px 0; color: var(--text-secondary);">Last Usable:</td><td id="calc-last-ip" style="font-family: monospace; font-weight: bold; text-align: right;">--</td></tr>
+                <tr><td style="padding: 6px 0; color: var(--text-secondary);">Total Hosts:</td><td id="calc-total-hosts" style="font-family: monospace; font-weight: bold; text-align: right; color: var(--accent-cyan);">--</td></tr>
+              </table>
+            </div>
+          </div>
+
+          <!-- Ping Monitor Card -->
+          <div class="port-results-card" style="display: flex; flex-direction: column; gap: 1rem;">
+            <div class="results-header" style="margin-bottom: 0;">
+              <div>
+                <h3>Target Ping Stability Monitor</h3>
+                <p style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 2px;">Track continuous round-trip time latency fluctuation for any node.</p>
+              </div>
+              <button id="ping-monitor-btn" class="btn btn-secondary" style="padding: 8px 16px;">Start Monitor</button>
+            </div>
+
+            <div class="input-with-button">
+              <input type="text" id="ping-monitor-target" placeholder="Enter IP or Domain (e.g. 8.8.8.8)" value="8.8.8.8" style="background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-color); border-radius: 12px; padding: 0.75rem 1rem; color: var(--text-primary); font-family: monospace; font-size: 1rem; outline: none; flex-grow: 1;">
+            </div>
+
+            <div class="chart-wrapper" style="height: 300px; position: relative;">
+              <canvas id="pingMonitorChart"></canvas>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Port Scan Modal for tables -->
+  <div class="modal" id="port-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Direct Port Audit</h3>
+        <button class="close-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p>Scanning standard ports on <strong id="modal-ip-display">192.168.1.1</strong>...</p>
+        <div class="modal-loader" id="modal-loader">
+          <div class="pulse-ring"></div>
+        </div>
+        <div id="modal-results" class="hidden">
+          <table class="modal-table">
+            <thead>
+              <tr>
+                <th>Port</th>
+                <th>Common Service</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="modal-table-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
