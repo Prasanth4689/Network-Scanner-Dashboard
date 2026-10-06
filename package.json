@@ -4,7 +4,8 @@
   "description": "A premium, real-time local network scanner dashboard with Express backend and glassmorphic UI.",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "echo Build complete"
   },
   "dependencies": {
     "express": "^4.19.2",

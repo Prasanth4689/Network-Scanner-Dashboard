@@ -705,8 +705,12 @@ wss.on('connection', (ws) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`NetPulse Server running on http://localhost:${PORT}`);
-  console.log('Starting real-time network scanner...');
-  startScanner(wss);
-});
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`NetPulse Server running on http://localhost:${PORT}`);
+    console.log('Starting real-time network scanner...');
+    startScanner(wss);
+  });
+}
+
+module.exports = app;
