@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NetPulse // Premium Network Scanner</title>
+  <title>NetPulse // Real-Time Network Scanner</title>
   <!-- Google Fonts: Outfit -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -20,6 +20,9 @@
   <div class="ambient-glow glow-1"></div>
   <div class="ambient-glow glow-2"></div>
 
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container"></div>
+
   <div class="dashboard-container">
     
     <!-- Sidebar / Brand -->
@@ -27,7 +30,7 @@
       <div class="brand">
         <i data-lucide="shield-alert" class="brand-icon"></i>
         <h1>NetPulse</h1>
-        <span class="version">v1.2.0</span>
+        <span class="version">v3.0.0</span>
       </div>
       
       <nav class="nav-links">
@@ -46,6 +49,9 @@
         <button class="nav-btn" data-tab="ports">
           <i data-lucide="network"></i> Port Scanning
         </button>
+        <button class="nav-btn" data-tab="security">
+          <i data-lucide="shield-check"></i> Security
+        </button>
       </nav>
 
       <div class="scan-settings-panel">
@@ -61,9 +67,9 @@
       </div>
 
       <div class="sidebar-footer">
-        <div class="status-indicator-container">
-          <span class="status-dot online"></span>
-          <span class="status-text">Backend Connected</span>
+        <div class="status-indicator-container" id="ws-status-container">
+          <span class="status-dot" id="ws-status-dot"></span>
+          <span class="status-text" id="ws-status-text">Connecting...</span>
         </div>
       </div>
     </aside>
@@ -78,10 +84,23 @@
           <p id="current-subnet">Scanning: Detecting local subnet...</p>
         </div>
         
+        <!-- Live Status Bar -->
+        <div class="live-status-bar">
+          <div class="live-indicator" id="live-indicator">
+            <span class="live-pulse"></span>
+            <span class="live-label" id="live-label">LIVE</span>
+          </div>
+          <div class="live-meta">
+            <span class="live-uptime" id="live-uptime">Uptime: 0s</span>
+            <span class="live-separator">|</span>
+            <span class="live-last-scan" id="live-last-scan">Last scan: --</span>
+          </div>
+        </div>
+
         <div class="action-group">
           <button id="scan-btn" class="btn btn-primary">
             <i data-lucide="play-circle" class="btn-icon"></i>
-            <span>Scan Network</span>
+            <span>Force Scan</span>
           </button>
         </div>
       </header>
@@ -120,6 +139,17 @@
             <div class="card-body">
               <h3 id="metric-ip" class="ip-display">127.0.0.1</h3>
               <p id="metric-subnet-mask" class="sub-label">255.255.255.0</p>
+            </div>
+          </div>
+          
+          <div class="metric-card health-card">
+            <div class="card-header">
+              <span>NETWORK HEALTH</span>
+              <i data-lucide="heart-pulse" class="card-icon green"></i>
+            </div>
+            <div class="card-body">
+              <h3 id="metric-health" class="health-score">--</h3>
+              <p id="health-grade" class="trend positive"><i data-lucide="shield-check"></i> Calculating...</p>
             </div>
           </div>
         </div>
@@ -197,12 +227,26 @@
                   <td colspan="7" class="loading-state">
                     <div class="empty-state">
                       <i data-lucide="refresh-cw" class="spinner"></i>
-                      <p>Waiting for scan initialization...</p>
+                      <p>Connecting to real-time scanner...</p>
                     </div>
                   </td>
                 </tr>
               </tbody>
             </table>
+          </div>
+        </div>
+
+        <!-- Device Event Log -->
+        <div class="event-log-card">
+          <div class="event-log-header">
+            <div>
+              <h3><i data-lucide="activity" style="width: 18px; height: 18px; display: inline; vertical-align: middle;"></i> Live Network Event Log</h3>
+              <p>Real-time device join/leave activity on your network.</p>
+            </div>
+            <button id="clear-events-btn" class="btn btn-secondary" style="padding: 6px 12px; font-size: 0.8rem; border-radius: 8px;">Clear Log</button>
+          </div>
+          <div id="event-log-list" class="event-log-list">
+            <p class="event-empty">Waiting for network events...</p>
           </div>
         </div>
 
@@ -327,6 +371,78 @@
             </div>
           </div>
         </div>
+    </section>
+
+      <!-- Security Analysis Tab -->
+      <section id="tab-security" class="tab-content">
+        <div class="security-wrapper">
+          <!-- Security Score Overview -->
+          <div class="security-overview-card">
+            <div class="security-score-ring">
+              <svg viewBox="0 0 120 120" class="score-ring-svg">
+                <circle cx="60" cy="60" r="52" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="8"/>
+                <circle id="score-ring-progress" cx="60" cy="60" r="52" fill="none" stroke="var(--accent-cyan)" stroke-width="8" stroke-linecap="round" stroke-dasharray="326.7" stroke-dashoffset="326.7" transform="rotate(-90 60 60)" style="transition: stroke-dashoffset 1s ease;"/>
+              </svg>
+              <div class="score-ring-text">
+                <span id="security-score-value" class="score-number">--</span>
+                <span id="security-grade-label" class="score-grade">--</span>
+              </div>
+            </div>
+            <div class="security-breakdown">
+              <h3>Network Health Report</h3>
+              <p style="color: var(--text-secondary); margin-bottom: 1rem;">Real-time security posture assessment based on device reachability, latency, and network density.</p>
+              <div class="breakdown-items">
+                <div class="breakdown-item">
+                  <span class="breakdown-label">Latency Score</span>
+                  <div class="breakdown-bar"><div id="bar-latency" class="breakdown-fill" style="width: 0%"></div></div>
+                  <span id="val-latency" class="breakdown-val">--</span>
+                </div>
+                <div class="breakdown-item">
+                  <span class="breakdown-label">Reachability</span>
+                  <div class="breakdown-bar"><div id="bar-reachability" class="breakdown-fill fill-green" style="width: 0%"></div></div>
+                  <span id="val-reachability" class="breakdown-val">--</span>
+                </div>
+                <div class="breakdown-item">
+                  <span class="breakdown-label">Network Density</span>
+                  <div class="breakdown-bar"><div id="bar-density" class="breakdown-fill fill-purple" style="width: 0%"></div></div>
+                  <span id="val-density" class="breakdown-val">--</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- Traceroute Tool -->
+          <div class="traceroute-card">
+            <h3><i data-lucide="route" style="width:18px;height:18px;display:inline;vertical-align:middle;"></i> Route Trace Analysis</h3>
+            <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 1rem;">Trace the network path and measure hop latency to any destination.</p>
+            <div class="input-with-button" style="margin-bottom: 1rem;">
+              <input type="text" id="traceroute-target" placeholder="Enter IP or domain (e.g. 8.8.8.8)" value="8.8.8.8" style="background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); border-radius: 12px; padding: 0.75rem 1rem; color: var(--text-primary); font-family: monospace; font-size: 1rem; outline: none; flex-grow: 1;">
+              <button id="traceroute-btn" class="btn btn-primary" style="white-space: nowrap;">Trace Route</button>
+            </div>
+            <div id="traceroute-results" class="traceroute-results"></div>
+          </div>
+          <!-- Network Stats -->
+          <div class="stats-card">
+            <h3><i data-lucide="bar-chart-3" style="width:18px;height:18px;display:inline;vertical-align:middle;"></i> Network Statistics</h3>
+            <div class="stats-grid">
+              <div class="stat-item"><span class="stat-value" id="stat-total-scans">0</span><span class="stat-label">Total Scans</span></div>
+              <div class="stat-item"><span class="stat-value" id="stat-unique-devices">0</span><span class="stat-label">Unique Devices</span></div>
+              <div class="stat-item"><span class="stat-value" id="stat-peak-devices">0</span><span class="stat-label">Peak Devices</span></div>
+              <div class="stat-item"><span class="stat-value" id="stat-uptime">0s</span><span class="stat-label">Server Uptime</span></div>
+              <div class="stat-item"><span class="stat-value" id="stat-events-joined">0</span><span class="stat-label">Join Events</span></div>
+              <div class="stat-item"><span class="stat-value" id="stat-events-left">0</span><span class="stat-label">Leave Events</span></div>
+            </div>
+          </div>
+          <!-- DNS Lookup -->
+          <div class="dns-card">
+            <h3><i data-lucide="globe" style="width:18px;height:18px;display:inline;vertical-align:middle;"></i> DNS Reverse Lookup</h3>
+            <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 1rem;">Resolve IP addresses to their associated hostnames.</p>
+            <div class="input-with-button" style="margin-bottom: 1rem;">
+              <input type="text" id="dns-lookup-target" placeholder="Enter IP (e.g. 8.8.8.8)" value="8.8.8.8" style="background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); border-radius: 12px; padding: 0.75rem 1rem; color: var(--text-primary); font-family: monospace; font-size: 1rem; outline: none; flex-grow: 1;">
+              <button id="dns-lookup-btn" class="btn btn-primary" style="white-space: nowrap;">Lookup</button>
+            </div>
+            <div id="dns-results" class="dns-results"></div>
+          </div>
+        </div>
       </section>
 
     </main>
@@ -356,6 +472,18 @@
             <tbody id="modal-table-body"></tbody>
           </table>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="device-detail-modal">
+    <div class="modal-content" style="max-width: 600px;">
+      <div class="modal-header">
+        <h3>Device Details</h3>
+        <button class="close-modal" data-modal="device-detail-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="device-detail-content"></div>
       </div>
     </div>
   </div>

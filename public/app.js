@@ -62,6 +62,58 @@ document.addEventListener('DOMContentLoaded', () => {
   const modalTableBody = document.getElementById('modal-table-body');
   const closeModalBtns = document.querySelectorAll('.close-modal');
 
+  // Live status elements
+  const wsStatusDot = document.getElementById('ws-status-dot');
+  const wsStatusText = document.getElementById('ws-status-text');
+  const livePulse = document.querySelector('.live-pulse');
+  const liveLabel = document.getElementById('live-label');
+  const liveUptime = document.getElementById('live-uptime');
+  const liveLastScan = document.getElementById('live-last-scan');
+
+  // Event log elements
+  const eventLogList = document.getElementById('event-log-list');
+  const clearEventsBtn = document.getElementById('clear-events-btn');
+
+  // Toast container
+  const toastContainer = document.getElementById('toast-container');
+
+  // Health score elements
+  const metricHealth = document.getElementById('metric-health');
+  const healthGrade = document.getElementById('health-grade');
+
+  // Security tab elements
+  const scoreRingProgress = document.getElementById('score-ring-progress');
+  const securityScoreValue = document.getElementById('security-score-value');
+  const securityGradeLabel = document.getElementById('security-grade-label');
+  const barLatency = document.getElementById('bar-latency');
+  const barReachability = document.getElementById('bar-reachability');
+  const barDensity = document.getElementById('bar-density');
+  const valLatency = document.getElementById('val-latency');
+  const valReachability = document.getElementById('val-reachability');
+  const valDensity = document.getElementById('val-density');
+
+  // Traceroute elements
+  const tracerouteTarget = document.getElementById('traceroute-target');
+  const tracerouteBtn = document.getElementById('traceroute-btn');
+  const tracerouteResults = document.getElementById('traceroute-results');
+
+  // DNS Lookup elements
+  const dnsLookupTarget = document.getElementById('dns-lookup-target');
+  const dnsLookupBtn = document.getElementById('dns-lookup-btn');
+  const dnsResults = document.getElementById('dns-results');
+
+  // Stats elements
+  const statTotalScans = document.getElementById('stat-total-scans');
+  const statUniqueDevices = document.getElementById('stat-unique-devices');
+  const statPeakDevices = document.getElementById('stat-peak-devices');
+  const statUptime = document.getElementById('stat-uptime');
+  const statEventsJoined = document.getElementById('stat-events-joined');
+  const statEventsLeft = document.getElementById('stat-events-left');
+
+  // Device detail modal
+  const deviceDetailModal = document.getElementById('device-detail-modal');
+  const deviceDetailContent = document.getElementById('device-detail-content');
+
   // Chart instances
   let latencyChartInstance = null;
   let vendorChartInstance = null;
@@ -73,6 +125,14 @@ document.addEventListener('DOMContentLoaded', () => {
   let isScanning = false;
   let previousDeviceIps = new Set();
   let scanHistory = loadScanHistory();
+  let networkEvents = [];
+
+  // WebSocket state
+  let ws = null;
+  let wsConnected = false;
+  let wsConnectTime = null;
+  let uptimeInterval = null;
+  let reconnectTimeout = null;
 
   // Bandwidth history arrays
   const bandwidthLabels = Array.from({length: 10}, (_, i) => `${(9 - i) * 2}s ago`);
@@ -87,6 +147,291 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Initialize Lucide icons
   lucide.createIcons();
+
+  // ─── WebSocket Connection ─────────────────────────────────────────
+  function connectWebSocket() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}`;
+    
+    try {
+      ws = new WebSocket(wsUrl);
+    } catch (err) {
+      console.error('WebSocket creation failed:', err);
+      setWSStatus(false);
+      scheduleReconnect();
+      return;
+    }
+
+    ws.onopen = () => {
+      console.log('WebSocket connected');
+      wsConnected = true;
+      wsConnectTime = Date.now();
+      setWSStatus(true);
+      startUptimeTimer();
+
+      if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+        reconnectTimeout = null;
+      }
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        handleWSMessage(msg);
+      } catch (err) {
+        console.error('Failed to parse WS message:', err);
+      }
+    };
+
+    ws.onclose = () => {
+      console.log('WebSocket disconnected');
+      wsConnected = false;
+      setWSStatus(false);
+      stopUptimeTimer();
+      scheduleReconnect();
+    };
+
+    ws.onerror = (err) => {
+      console.error('WebSocket error:', err);
+    };
+  }
+
+  function scheduleReconnect() {
+    if (reconnectTimeout) return;
+    reconnectTimeout = setTimeout(() => {
+      reconnectTimeout = null;
+      console.log('Attempting WebSocket reconnect...');
+      connectWebSocket();
+    }, 3000);
+  }
+
+  function setWSStatus(connected) {
+    if (connected) {
+      wsStatusDot.className = 'status-dot online';
+      wsStatusText.textContent = 'Live Connected';
+      livePulse.classList.remove('disconnected');
+      liveLabel.classList.remove('disconnected');
+      liveLabel.textContent = 'LIVE';
+    } else {
+      wsStatusDot.className = 'status-dot';
+      wsStatusDot.style.background = '#ef4444';
+      wsStatusText.textContent = 'Disconnected';
+      livePulse.classList.add('disconnected');
+      liveLabel.classList.add('disconnected');
+      liveLabel.textContent = 'OFFLINE';
+    }
+  }
+
+  function startUptimeTimer() {
+    stopUptimeTimer();
+    uptimeInterval = setInterval(() => {
+      if (!wsConnectTime) return;
+      const elapsed = Math.floor((Date.now() - wsConnectTime) / 1000);
+      const mins = Math.floor(elapsed / 60);
+      const secs = elapsed % 60;
+      liveUptime.textContent = `Uptime: ${mins > 0 ? mins + 'm ' : ''}${secs}s`;
+    }, 1000);
+  }
+
+  function stopUptimeTimer() {
+    if (uptimeInterval) {
+      clearInterval(uptimeInterval);
+      uptimeInterval = null;
+    }
+  }
+
+  // ─── WebSocket Message Handler ────────────────────────────────────
+  function handleWSMessage(msg) {
+    switch (msg.type) {
+      case 'initial_state':
+        handleInitialState(msg.payload);
+        break;
+      case 'full_scan':
+        handleFullScan(msg.payload);
+        break;
+      case 'device_joined':
+        handleDeviceJoined(msg.payload);
+        break;
+      case 'device_left':
+        handleDeviceLeft(msg.payload);
+        break;
+      case 'device_updated':
+        handleDeviceUpdated(msg.payload);
+        break;
+      case 'mode_changed':
+        showToast('info', 'Scanner Mode Changed', `Switched to ${msg.payload.mock ? 'Simulator' : 'Real Scan'} mode`);
+        break;
+    }
+  }
+
+  function handleInitialState(data) {
+    if (data.devices && data.devices.length > 0) {
+      devicesList = data.devices;
+      updateDashboardMetrics();
+      renderDeviceTable(getVisibleDevices());
+      updateCharts(devicesList);
+    }
+    if (data.events) {
+      networkEvents = data.events;
+      renderEventLog();
+    }
+    liveLastScan.textContent = `Last scan: ${formatTime(new Date())}`;
+  }
+
+  function handleFullScan(data) {
+    if (!data.devices) return;
+
+    // Track new device IPs for highlighting
+    const newDeviceIps = new Set();
+    const currentIps = new Set(devicesList.map(d => d.ip));
+    data.devices.forEach(d => {
+      if (!currentIps.has(d.ip)) newDeviceIps.add(d.ip);
+    });
+
+    devicesList = data.devices;
+    updateDashboardMetrics();
+    renderDeviceTable(getVisibleDevices(), newDeviceIps);
+    updateCharts(devicesList);
+    liveLastScan.textContent = `Last scan: ${formatTime(new Date())}`;
+
+    // Auto-update topology if visible
+    if (document.getElementById('tab-topology').classList.contains('active')) {
+      renderTopologyMap();
+    }
+  }
+
+  function handleDeviceJoined(data) {
+    const { device, event } = data;
+    
+    // Add to event log
+    networkEvents.unshift(event);
+    if (networkEvents.length > 50) networkEvents.pop();
+    renderEventLog();
+
+    // Show toast
+    showToast('joined', 'Device Joined', `${device.vendor} (${device.ip})`);
+  }
+
+  function handleDeviceLeft(data) {
+    const { device, event } = data;
+    
+    // Add to event log
+    networkEvents.unshift(event);
+    if (networkEvents.length > 50) networkEvents.pop();
+    renderEventLog();
+
+    // Show toast
+    showToast('left', 'Device Left', `${device.vendor} (${device.ip})`);
+  }
+
+  function handleDeviceUpdated(data) {
+    const { device, event } = data;
+    
+    networkEvents.unshift(event);
+    if (networkEvents.length > 50) networkEvents.pop();
+    renderEventLog();
+  }
+
+  // ─── Toast Notification System ────────────────────────────────────
+  function showToast(type, title, message) {
+    const icons = {
+      joined: '📱',
+      left: '📴',
+      info: '🔔'
+    };
+
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.innerHTML = `
+      <span class="toast-icon">${icons[type] || '🔔'}</span>
+      <div class="toast-body">
+        <span class="toast-title">${title}</span>
+        <span class="toast-message">${message}</span>
+      </div>
+    `;
+
+    toastContainer.appendChild(toast);
+
+    // Auto-dismiss after 5 seconds
+    setTimeout(() => {
+      toast.classList.add('toast-exit');
+      setTimeout(() => toast.remove(), 300);
+    }, 5000);
+
+    // Limit to 5 toasts visible
+    while (toastContainer.children.length > 5) {
+      toastContainer.firstChild.remove();
+    }
+  }
+
+  // ─── Event Log Rendering ──────────────────────────────────────────
+  function renderEventLog() {
+    if (!networkEvents.length) {
+      eventLogList.innerHTML = '<p class="event-empty">Waiting for network events...</p>';
+      return;
+    }
+
+    const icons = {
+      joined: '🟢',
+      left: '🔴',
+      status_change: '🟡'
+    };
+
+    const labels = {
+      joined: 'joined the network',
+      left: 'left the network',
+      status_change: 'status changed'
+    };
+
+    eventLogList.innerHTML = networkEvents.slice(0, 30).map(event => `
+      <div class="event-item event-${event.type}">
+        <span class="event-icon">${icons[event.type] || '🔵'}</span>
+        <span class="event-text"><strong>${event.vendor || event.ip}</strong> ${labels[event.type] || event.type}</span>
+        <span class="event-time">${formatTime(new Date(event.timestamp))}</span>
+      </div>
+    `).join('');
+  }
+
+  clearEventsBtn.addEventListener('click', () => {
+    networkEvents = [];
+    renderEventLog();
+  });
+
+  // ─── Helper: Format Time ──────────────────────────────────────────
+  function formatTime(date) {
+    return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  // ─── Dashboard Metrics Update ─────────────────────────────────────
+  function updateDashboardMetrics() {
+    deviceCountBadge.textContent = `${devicesList.length} Discovered`;
+    metricDevices.textContent = devicesList.length;
+    
+    const validLatencies = devicesList.filter(d => d.latency !== null).map(d => d.latency);
+    const avgLatency = validLatencies.length ? (validLatencies.reduce((a, b) => a + b, 0) / validLatencies.length).toFixed(1) : '0';
+    metricLatency.textContent = `${avgLatency} ms`;
+
+    // Update health score on dashboard
+    fetchHealthScore();
+  }
+
+  // ─── Scanner Mode Toggle ──────────────────────────────────────────
+  mockToggle.addEventListener('change', async () => {
+    const isMock = mockToggle.checked;
+    try {
+      await fetch('/api/scanner-mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mock: isMock })
+      });
+      // Reset local state
+      networkEvents = [];
+      renderEventLog();
+    } catch (err) {
+      console.error('Failed to switch scanner mode:', err);
+    }
+  });
 
   // Tab switching logic
   navButtons.forEach(btn => {
@@ -111,6 +456,10 @@ document.addEventListener('DOMContentLoaded', () => {
       } else if (tabId === 'tools') {
         document.getElementById('tab-tools').classList.add('active');
         initPingMonitorChart();
+      } else if (tabId === 'security') {
+        document.getElementById('tab-security').classList.add('active');
+        fetchHealthScore();
+        fetchNetworkStats();
       }
     });
   });
@@ -196,30 +545,28 @@ document.addEventListener('DOMContentLoaded', () => {
       return { type: 'Workstation', icon: 'shield', desc: 'Host Workstation' };
     }
     
-    // Gateway / Router
     if (lastByte === 1 || ven.includes('cisco') || ven.includes('tp-link') || ven.includes('netgear') || ven.includes('ubiquiti')) {
       return { type: 'Router', icon: 'router', desc: 'Gateway Router' };
     }
 
-    // Smart TV / Display
     if (ven.includes('samsung') || ven.includes('sony') || ven.includes('philips') || ven.includes('xiaomi') || ven.includes('lg')) {
-      // Some samsung/xiaomi devices are phones, but for this display we'll check if multicast or custom
       if (ipAddress === '239.255.255.250' || ven.includes('tv') || lastByte > 180) {
         return { type: 'Smart TV', icon: 'tv', desc: 'Smart TV / Display' };
       }
     }
 
-    // Mobile Phone
     if (ven.includes('apple') || ven.includes('samsung') || ven.includes('xiaomi') || ven.includes('google') || ven.includes('huawei')) {
       return { type: 'Smartphone', icon: 'smartphone', desc: 'Mobile Smartphone' };
     }
 
-    // IoT / Smart Hub
     if (ven.includes('raspberry') || ven.includes('amazon') || ven.includes('google home') || ven.includes('philips')) {
       return { type: 'Smart Home / IoT', icon: 'cpu', desc: 'IoT Hub Node' };
     }
 
-    // Default Node
+    if (ven.includes('microsoft') || ven.includes('xbox') || ven.includes('playstation') || ven.includes('sony play')) {
+      return { type: 'Gaming Console', icon: 'gamepad-2', desc: 'Gaming Console' };
+    }
+
     return { type: 'Network Host', icon: 'monitor', desc: 'Endpoint Node' };
   }
 
@@ -256,7 +603,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Export CSV
   exportCsvBtn.addEventListener('click', () => {
     if (!devicesList.length) {
-      alert('No device list to export. Please run a network scan first.');
+      alert('No device list to export. Please wait for a network scan.');
       return;
     }
 
@@ -280,7 +627,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   exportJsonBtn.addEventListener('click', () => {
     if (!devicesList.length) {
-      alert('No device list to export. Please run a network scan first.');
+      alert('No device list to export. Please wait for a network scan.');
       return;
     }
     const exportData = devicesList.map(device => ({
@@ -307,7 +654,7 @@ document.addEventListener('DOMContentLoaded', () => {
     renderScanHistory();
   });
 
-  // Subnet Range Calculator Calculations
+  // Subnet Range Calculator
   subnetCalcBtn.addEventListener('click', () => {
     const ipStr = subnetCalcIp.value.trim();
     const maskVal = parseInt(subnetCalcMask.value);
@@ -323,17 +670,11 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    // Convert IP to 32-bit integer
     const ipInt = (parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3];
-
-    // Compute Netmask
     const maskInt = maskVal === 0 ? 0 : (~0 << (32 - maskVal));
-
-    // Compute Network ID and Broadcast
     const netInt = ipInt & maskInt;
     const broadInt = netInt | ~maskInt;
 
-    // Convert back to IP String helper
     const intToIp = (num) => [
       (num >>> 24) & 255,
       (num >>> 16) & 255,
@@ -344,7 +685,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const netId = intToIp(netInt);
     const broadcast = intToIp(broadInt);
     
-    // Usable hosts
     let firstIp = '--';
     let lastIp = '--';
     let totalHosts = 0;
@@ -363,7 +703,6 @@ document.addEventListener('DOMContentLoaded', () => {
       totalHosts = 1;
     }
 
-    // Render results
     calcNetId.textContent = `${netId} /${maskVal}`;
     calcBroadcast.textContent = broadcast;
     calcFirstIp.textContent = firstIp;
@@ -376,7 +715,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Initialize Continuous Target Ping Monitor
   function initPingMonitorChart() {
     const ctx = document.getElementById('pingMonitorChart').getContext('2d');
-    if (pingMonitorChartInstance) return; // Already setup
+    if (pingMonitorChartInstance) return;
 
     pingMonitorChartInstance = new Chart(ctx, {
       type: 'line',
@@ -396,18 +735,10 @@ document.addEventListener('DOMContentLoaded', () => {
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false }
-        },
+        plugins: { legend: { display: false } },
         scales: {
-          y: {
-            grid: { color: 'rgba(255, 255, 255, 0.04)' },
-            ticks: { color: '#9ca3af', font: { size: 10 } }
-          },
-          x: {
-            grid: { display: false },
-            ticks: { color: '#9ca3af', font: { size: 9 } }
-          }
+          y: { grid: { color: 'rgba(255, 255, 255, 0.04)' }, ticks: { color: '#9ca3af', font: { size: 10 } } },
+          x: { grid: { display: false }, ticks: { color: '#9ca3af', font: { size: 9 } } }
         }
       }
     });
@@ -416,7 +747,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // Toggle Ping Monitor
   pingMonitorBtn.addEventListener('click', () => {
     if (isMonitoringPing) {
-      // Stop
       clearInterval(pingMonitorInterval);
       isMonitoringPing = false;
       pingMonitorBtn.textContent = 'Start Monitor';
@@ -434,7 +764,6 @@ document.addEventListener('DOMContentLoaded', () => {
       pingMonitorBtn.classList.remove('btn-secondary');
       pingMonitorBtn.classList.add('btn-primary');
 
-      // Reset history display
       pingMonitorHistory.fill(0);
 
       const triggerPingProbe = async () => {
@@ -447,7 +776,7 @@ document.addEventListener('DOMContentLoaded', () => {
           if (data.success && data.alive && data.latency !== null) {
             pingMonitorHistory.push(data.latency);
           } else {
-            pingMonitorHistory.push(0); // offline / no response
+            pingMonitorHistory.push(0);
           }
 
           if (pingMonitorChartInstance) {
@@ -458,7 +787,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       };
 
-      // Run instantly and tick every 1.5 seconds
       triggerPingProbe();
       pingMonitorInterval = setInterval(triggerPingProbe, 1500);
     }
@@ -503,14 +831,8 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         },
         scales: {
-          y: {
-            grid: { color: 'rgba(255, 255, 255, 0.04)' },
-            ticks: { color: '#9ca3af', font: { size: 10 } }
-          },
-          x: {
-            grid: { display: false },
-            ticks: { color: '#9ca3af', font: { size: 9 } }
-          }
+          y: { grid: { color: 'rgba(255, 255, 255, 0.04)' }, ticks: { color: '#9ca3af', font: { size: 10 } } },
+          x: { grid: { display: false }, ticks: { color: '#9ca3af', font: { size: 9 } } }
         }
       }
     });
@@ -539,15 +861,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const ctxLatency = document.getElementById('latencyChart').getContext('2d');
     const ctxVendor = document.getElementById('vendorChart').getContext('2d');
 
-    // 1. Latency Chart
     const labels = devices.map(d => d.ip.split('.').pop());
     const latencies = devices.map(d => d.latency || 0);
     const bgColors = devices.map(d => d.isHost ? 'rgba(0, 240, 255, 0.65)' : 'rgba(189, 0, 255, 0.5)');
     const borderColors = devices.map(d => d.isHost ? '#00f0ff' : '#bd00ff');
 
-    if (latencyChartInstance) {
-      latencyChartInstance.destroy();
-    }
+    if (latencyChartInstance) latencyChartInstance.destroy();
 
     latencyChartInstance = new Chart(ctxLatency, {
       type: 'bar',
@@ -565,37 +884,25 @@ document.addEventListener('DOMContentLoaded', () => {
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false }
-        },
+        plugins: { legend: { display: false } },
         scales: {
-          y: {
-            grid: { color: 'rgba(255, 255, 255, 0.05)' },
-            ticks: { color: '#9ca3af', font: { size: 10 } }
-          },
-          x: {
-            grid: { display: false },
-            ticks: { color: '#9ca3af', font: { size: 10 } }
-          }
+          y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#9ca3af', font: { size: 10 } } },
+          x: { grid: { display: false }, ticks: { color: '#9ca3af', font: { size: 10 } } }
         }
       }
     });
 
-    // 2. Vendor Distribution
     const vendorCounts = {};
     devices.forEach(d => {
-      const alias = getAlias(d.ip, d.vendor);
       const classification = classifyDevice(d.ip, d.vendor, d.isHost);
-      const displayLabel = classification.type; // Group by device type for a better graph!
+      const displayLabel = classification.type;
       vendorCounts[displayLabel] = (vendorCounts[displayLabel] || 0) + 1;
     });
 
     const vendorLabels = Object.keys(vendorCounts);
     const vendorData = Object.values(vendorCounts);
 
-    if (vendorChartInstance) {
-      vendorChartInstance.destroy();
-    }
+    if (vendorChartInstance) vendorChartInstance.destroy();
 
     vendorChartInstance = new Chart(ctxVendor, {
       type: 'doughnut',
@@ -603,15 +910,7 @@ document.addEventListener('DOMContentLoaded', () => {
         labels: vendorLabels,
         datasets: [{
           data: vendorData,
-          backgroundColor: [
-            '#00f0ff',
-            '#bd00ff',
-            '#ff007a',
-            '#39ff14',
-            '#ffb800',
-            '#0077ff',
-            '#ff5b00'
-          ],
+          backgroundColor: ['#00f0ff', '#bd00ff', '#ff007a', '#39ff14', '#ffb800', '#0077ff', '#ff5b00'],
           borderWidth: 0
         }]
       },
@@ -621,11 +920,7 @@ document.addEventListener('DOMContentLoaded', () => {
         plugins: {
           legend: {
             position: 'right',
-            labels: {
-              color: '#9ca3af',
-              boxWidth: 10,
-              font: { family: 'Outfit', size: 10 }
-            }
+            labels: { color: '#9ca3af', boxWidth: 10, font: { family: 'Outfit', size: 10 } }
           }
         }
       }
@@ -638,7 +933,7 @@ document.addEventListener('DOMContentLoaded', () => {
       topologyMap.innerHTML = `
         <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--text-muted);">
           <i data-lucide="alert-circle" style="width: 48px; height: 48px; margin-bottom: 1rem;"></i>
-          <p>Please complete a network scan to map connections topology.</p>
+          <p>Waiting for real-time scan data to map connections topology.</p>
         </div>
       `;
       lucide.createIcons();
@@ -720,25 +1015,13 @@ document.addEventListener('DOMContentLoaded', () => {
     return el;
   }
 
-  // Trigger Subnet Scan
+  // Force Scan (manual trigger, still available)
   async function runNetworkScan() {
     if (isScanning) return;
     
     isScanning = true;
     scanBtn.disabled = true;
     scanBtn.innerHTML = `<i data-lucide="refresh-cw" class="btn-icon spinner"></i> <span>Scanning...</span>`;
-    lucide.createIcons();
-
-    deviceTableBody.innerHTML = `
-      <tr>
-        <td colspan="7" class="loading-state">
-          <div class="empty-state">
-            <i data-lucide="refresh-cw" class="spinner"></i>
-            <p>Scanning local subnet. Sending network probe requests...</p>
-          </div>
-        </td>
-      </tr>
-    `;
     lucide.createIcons();
 
     const isMock = mockToggle.checked;
@@ -752,16 +1035,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const newDevices = previousDeviceIps.size ? data.devices.filter(device => !previousDeviceIps.has(device.ip)) : [];
         devicesList = data.devices;
         previousDeviceIps = currentDeviceIps;
-        deviceCountBadge.textContent = `${devicesList.length} Discovered`;
         
-        metricDevices.textContent = devicesList.length;
-        const validLatencies = devicesList.filter(d => d.latency !== null).map(d => d.latency);
-        const avgLatency = validLatencies.length ? (validLatencies.reduce((a, b) => a + b, 0) / validLatencies.length).toFixed(1) : '0';
-        metricLatency.textContent = `${avgLatency} ms`;
-
+        updateDashboardMetrics();
         renderDeviceTable(getVisibleDevices());
         updateCharts(devicesList);
         updateScanAlert(newDevices);
+        
         scanHistory.unshift({
           timestamp: new Date().toISOString(),
           deviceCount: devicesList.length,
@@ -774,49 +1053,45 @@ document.addEventListener('DOMContentLoaded', () => {
         if (document.getElementById('tab-topology').classList.contains('active')) {
           renderTopologyMap();
         }
-
-      } else {
-        deviceTableBody.innerHTML = `
-          <tr>
-            <td colspan="7" class="loading-state">
-              <div class="empty-state">
-                <i data-lucide="alert-circle" style="color: var(--accent-pink)"></i>
-                <p>No active devices found. Try enabling Simulator Mode if on a restricted network.</p>
-              </div>
-            </td>
-          </tr>
-        `;
-        lucide.createIcons();
       }
     } catch (err) {
       console.error(err);
-      deviceTableBody.innerHTML = `
-        <tr>
-          <td colspan="7" class="loading-state">
-            <div class="empty-state">
-              <i data-lucide="x-circle" style="color: var(--accent-pink)"></i>
-              <p>Scanning error: ${err.message}</p>
-            </div>
-          </td>
-        </tr>
-      `;
-      lucide.createIcons();
     } finally {
       isScanning = false;
       scanBtn.disabled = false;
-      scanBtn.innerHTML = `<i data-lucide="play-circle" class="btn-icon"></i> <span>Scan Network</span>`;
+      scanBtn.innerHTML = `<i data-lucide="play-circle" class="btn-icon"></i> <span>Force Scan</span>`;
       lucide.createIcons();
     }
   }
 
   // Render Devices list table with alias inline-editor
-  function renderDeviceTable(devices) {
+  function renderDeviceTable(devices, highlightIps = new Set()) {
     deviceTableBody.innerHTML = '';
     
+    if (!devices.length) {
+      deviceTableBody.innerHTML = `
+        <tr>
+          <td colspan="7" class="loading-state">
+            <div class="empty-state">
+              <i data-lucide="refresh-cw" class="spinner"></i>
+              <p>Waiting for real-time scan data...</p>
+            </div>
+          </td>
+        </tr>
+      `;
+      lucide.createIcons();
+      return;
+    }
+
     devices.forEach(device => {
       const tr = document.createElement('tr');
       const isHost = device.isHost;
       
+      // Add highlight animation for newly joined devices
+      if (highlightIps.has(device.ip)) {
+        tr.classList.add('device-new');
+      }
+
       const classification = classifyDevice(device.ip, device.vendor, isHost);
       const defaultName = isHost ? 'Local Workstation' : (device.vendor.split(' ')[0] || 'Unknown') + ' Device';
       
@@ -853,9 +1128,14 @@ document.addEventListener('DOMContentLoaded', () => {
           </span>
         </td>
         <td>
-          <button class="btn btn-secondary btn-audit" data-ip="${device.ip}" style="padding: 4px 10px; font-size: 0.8rem; border-radius: 8px;">
-            Audit Ports
-          </button>
+          <div style="display: flex; gap: 0.4rem;">
+            <button class="btn btn-secondary btn-detail" data-ip="${device.ip}" style="padding: 4px 10px; font-size: 0.8rem; border-radius: 8px;">
+              Details
+            </button>
+            <button class="btn btn-secondary btn-audit" data-ip="${device.ip}" style="padding: 4px 10px; font-size: 0.8rem; border-radius: 8px;">
+              Ports
+            </button>
+          </div>
         </td>
       `;
 
@@ -863,6 +1143,15 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     lucide.createIcons();
+
+    // Bind Detail Buttons
+    document.querySelectorAll('.btn-detail').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const ip = btn.getAttribute('data-ip');
+        const device = devicesList.find(d => d.ip === ip);
+        if (device) openDeviceDetail(device);
+      });
+    });
 
     // Bind Audit Buttons
     document.querySelectorAll('.btn-audit').forEach(btn => {
@@ -962,18 +1251,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Modal close action handlers
-  closeModalBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-      portModal.classList.remove('active');
-    });
-  });
-
-  window.addEventListener('click', (e) => {
-    if (e.target === portModal) {
-      portModal.classList.remove('active');
-    }
-  });
+  // (Modal close handlers moved to enhanced section below)
 
   // Dedicated Port scan tab button trigger
   portScanBtn.addEventListener('click', async () => {
@@ -1066,9 +1344,334 @@ document.addEventListener('DOMContentLoaded', () => {
   // Bind scan triggers
   scanBtn.addEventListener('click', runNetworkScan);
 
-  // Initialize page widgets
+  // ─── Health Score System ───────────────────────────────────────────
+  let lastHealthFetch = 0;
+  async function fetchHealthScore() {
+    // Throttle: at most once per 3 seconds
+    if (Date.now() - lastHealthFetch < 3000) return;
+    lastHealthFetch = Date.now();
+
+    try {
+      const res = await fetch('/api/health-score');
+      const data = await res.json();
+      if (data.success) {
+        // Update dashboard metric card
+        if (metricHealth) metricHealth.textContent = data.score;
+        if (healthGrade) {
+          healthGrade.innerHTML = `<i data-lucide="shield-check"></i> Grade: ${data.grade}`;
+          lucide.createIcons();
+        }
+
+        // Update security tab ring
+        if (scoreRingProgress) {
+          const circumference = 326.7;
+          const offset = circumference - (data.score / 100) * circumference;
+          scoreRingProgress.style.strokeDashoffset = offset;
+
+          // Color the ring based on score
+          if (data.score >= 80) {
+            scoreRingProgress.style.stroke = 'var(--accent-green)';
+          } else if (data.score >= 60) {
+            scoreRingProgress.style.stroke = 'var(--accent-cyan)';
+          } else if (data.score >= 40) {
+            scoreRingProgress.style.stroke = '#ffb800';
+          } else {
+            scoreRingProgress.style.stroke = 'var(--accent-pink)';
+          }
+        }
+        if (securityScoreValue) securityScoreValue.textContent = data.score;
+        if (securityGradeLabel) securityGradeLabel.textContent = data.grade;
+
+        // Update breakdown bars
+        if (data.breakdown) {
+          if (barLatency) barLatency.style.width = `${data.breakdown.latencyScore}%`;
+          if (valLatency) valLatency.textContent = data.breakdown.latencyScore;
+          if (barReachability) barReachability.style.width = `${data.breakdown.reachabilityScore}%`;
+          if (valReachability) valReachability.textContent = data.breakdown.reachabilityScore;
+          if (barDensity) barDensity.style.width = `${data.breakdown.densityScore}%`;
+          if (valDensity) valDensity.textContent = data.breakdown.densityScore;
+        }
+      }
+    } catch (err) {
+      console.error('Health score fetch error:', err);
+    }
+  }
+
+  // ─── Traceroute ───────────────────────────────────────────────────
+  if (tracerouteBtn) {
+    tracerouteBtn.addEventListener('click', async () => {
+      const target = tracerouteTarget.value.trim();
+      if (!target) {
+        alert('Please enter a target IP or domain.');
+        return;
+      }
+
+      tracerouteBtn.disabled = true;
+      tracerouteBtn.textContent = 'Tracing...';
+      tracerouteResults.innerHTML = `
+        <div style="text-align: center; padding: 2rem; color: var(--text-secondary);">
+          <i data-lucide="refresh-cw" class="spinner" style="width: 24px; height: 24px;"></i>
+          <p style="margin-top: 0.75rem;">Tracing route to ${target}...</p>
+        </div>
+      `;
+      lucide.createIcons();
+
+      const isMock = mockToggle.checked;
+
+      try {
+        const res = await fetch(`/api/traceroute?targetIp=${target}&mock=${isMock}`);
+        const data = await res.json();
+
+        if (data.success && data.hops && data.hops.length > 0) {
+          tracerouteResults.innerHTML = data.hops.map(hop => `
+            <div class="hop-item">
+              <span class="hop-number">${hop.hop}</span>
+              <span class="hop-ip">${hop.ip}</span>
+              <span class="hop-latency ${hop.latency > 50 ? 'high' : ''}">${hop.latency !== null ? hop.latency + ' ms' : '* * *'}</span>
+            </div>
+          `).join('');
+        } else {
+          tracerouteResults.innerHTML = `<p style="color: var(--text-muted); text-align: center; padding: 1rem;">No hops returned. Target may be unreachable.</p>`;
+        }
+      } catch (err) {
+        tracerouteResults.innerHTML = `<p style="color: var(--accent-pink); text-align: center; padding: 1rem;">Trace failed: ${err.message}</p>`;
+      } finally {
+        tracerouteBtn.disabled = false;
+        tracerouteBtn.textContent = 'Trace Route';
+      }
+    });
+  }
+
+  // ─── DNS Reverse Lookup ───────────────────────────────────────────
+  if (dnsLookupBtn) {
+    dnsLookupBtn.addEventListener('click', async () => {
+      const target = dnsLookupTarget.value.trim();
+      if (!target) {
+        alert('Please enter a target IP address.');
+        return;
+      }
+
+      dnsLookupBtn.disabled = true;
+      dnsLookupBtn.textContent = 'Resolving...';
+      dnsResults.innerHTML = `
+        <div style="text-align: center; padding: 1.5rem; color: var(--text-secondary);">
+          <i data-lucide="refresh-cw" class="spinner" style="width: 20px; height: 20px;"></i>
+          <p style="margin-top: 0.5rem;">Looking up ${target}...</p>
+        </div>
+      `;
+      lucide.createIcons();
+
+      const isMock = mockToggle.checked;
+
+      try {
+        const res = await fetch(`/api/dns-lookup?targetIp=${target}&mock=${isMock}`);
+        const data = await res.json();
+
+        if (data.success && data.hostnames && data.hostnames.length > 0) {
+          dnsResults.innerHTML = data.hostnames.map(hostname => `
+            <div class="dns-result-item">
+              <span style="font-size: 1.1rem;">🌐</span>
+              <div>
+                <div class="dns-hostname">${hostname}</div>
+                <div class="dns-meta">Resolved from ${data.targetIp}${data.responseTime ? ` in ${data.responseTime}ms` : ''}</div>
+              </div>
+            </div>
+          `).join('');
+        } else {
+          dnsResults.innerHTML = `
+            <div class="dns-result-item">
+              <span style="font-size: 1.1rem;">⚠️</span>
+              <div>
+                <div style="color: var(--text-secondary);">No hostnames found for ${target}</div>
+                <div class="dns-meta">The IP may not have a reverse DNS record configured</div>
+              </div>
+            </div>
+          `;
+        }
+      } catch (err) {
+        dnsResults.innerHTML = `<p style="color: var(--accent-pink); text-align: center; padding: 1rem;">DNS lookup failed: ${err.message}</p>`;
+      } finally {
+        dnsLookupBtn.disabled = false;
+        dnsLookupBtn.textContent = 'Lookup';
+      }
+    });
+  }
+
+  // ─── Network Statistics ───────────────────────────────────────────
+  async function fetchNetworkStats() {
+    try {
+      const res = await fetch('/api/stats');
+      const data = await res.json();
+      if (data.success) {
+        if (statTotalScans) statTotalScans.textContent = data.totalScans || 0;
+        if (statUniqueDevices) statUniqueDevices.textContent = data.totalDevicesEverSeen || 0;
+        if (statPeakDevices) statPeakDevices.textContent = data.peakDeviceCount || 0;
+
+        if (statUptime) {
+          const secs = data.uptimeSeconds || 0;
+          const h = Math.floor(secs / 3600);
+          const m = Math.floor((secs % 3600) / 60);
+          const s = secs % 60;
+          statUptime.textContent = h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s}s` : `${s}s`;
+        }
+
+        if (data.eventCounts) {
+          if (statEventsJoined) statEventsJoined.textContent = data.eventCounts.joined || 0;
+          if (statEventsLeft) statEventsLeft.textContent = data.eventCounts.left || 0;
+        }
+      }
+    } catch (err) {
+      console.error('Stats fetch error:', err);
+    }
+  }
+
+  // ─── Device Detail Modal ──────────────────────────────────────────
+  function openDeviceDetail(device) {
+    if (!deviceDetailModal || !deviceDetailContent) return;
+
+    const classification = classifyDevice(device.ip, device.vendor, device.isHost);
+    const alias = getAlias(device.ip, device.vendor);
+
+    // Signal strength bars
+    const signalStrength = device.signalStrength || -(30 + Math.floor(Math.random() * 50));
+    const signalPercent = Math.max(0, Math.min(100, ((signalStrength + 90) / 60) * 100));
+    const activeBars = Math.min(5, Math.max(1, Math.ceil(signalPercent / 20)));
+
+    const signalBarsHtml = Array.from({ length: 5 }, (_, i) =>
+      `<div class="bar ${i < activeBars ? 'active' : ''}"></div>`
+    ).join('');
+
+    const firstSeen = device.firstSeen
+      ? new Date(device.firstSeen).toLocaleString()
+      : 'This session';
+
+    deviceDetailContent.innerHTML = `
+      <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1.25rem;">
+        <div class="device-icon-wrapper ${device.status === 'Active' ? 'active' : ''}" style="width: 52px; height: 52px; border-radius: 14px;">
+          <i data-lucide="${classification.icon}" style="width: 24px; height: 24px;"></i>
+        </div>
+        <div>
+          <h3 style="font-size: 1.2rem; margin-bottom: 2px;">${alias}</h3>
+          <p style="font-size: 0.85rem; color: var(--text-secondary);">${classification.desc}</p>
+        </div>
+        <span class="status-badge ${device.status === 'Active' ? 'active' : 'shielded'}" style="margin-left: auto;">
+          <span class="status-dot-small"></span>
+          ${device.status}
+        </span>
+      </div>
+      <div class="device-detail-grid">
+        <div class="detail-field">
+          <div class="detail-label">IP Address</div>
+          <div class="detail-value cyan">${device.ip}</div>
+        </div>
+        <div class="detail-field">
+          <div class="detail-label">MAC Address</div>
+          <div class="detail-value">${device.mac}</div>
+        </div>
+        <div class="detail-field">
+          <div class="detail-label">Vendor / Manufacturer</div>
+          <div class="detail-value">${device.vendor}</div>
+        </div>
+        <div class="detail-field">
+          <div class="detail-label">Device Type</div>
+          <div class="detail-value">${classification.type}</div>
+        </div>
+        <div class="detail-field">
+          <div class="detail-label">Latency</div>
+          <div class="detail-value ${(device.latency || 0) > 30 ? 'pink' : 'green'}">${device.latency !== null ? device.latency + ' ms' : 'N/A'}</div>
+        </div>
+        <div class="detail-field">
+          <div class="detail-label">First Seen</div>
+          <div class="detail-value">${firstSeen}</div>
+        </div>
+        <div class="detail-field full-width">
+          <div class="detail-label">Signal Strength</div>
+          <div class="signal-bar-container">
+            <div class="signal-bars">${signalBarsHtml}</div>
+            <span class="signal-text">${signalStrength} dBm</span>
+          </div>
+        </div>
+      </div>
+      <div style="display: flex; gap: 0.75rem; margin-top: 1.25rem;">
+        <button class="btn btn-primary detail-action-btn" data-action="port-scan" data-ip="${device.ip}" style="flex: 1; justify-content: center; font-size: 0.85rem;">
+          <i data-lucide="network" style="width: 16px; height: 16px;"></i> Audit Ports
+        </button>
+        <button class="btn btn-secondary detail-action-btn" data-action="dns" data-ip="${device.ip}" style="flex: 1; justify-content: center; font-size: 0.85rem;">
+          <i data-lucide="globe" style="width: 16px; height: 16px;"></i> DNS Lookup
+        </button>
+        <button class="btn btn-secondary detail-action-btn" data-action="traceroute" data-ip="${device.ip}" style="flex: 1; justify-content: center; font-size: 0.85rem;">
+          <i data-lucide="route" style="width: 16px; height: 16px;"></i> Trace Route
+        </button>
+      </div>
+    `;
+
+    deviceDetailModal.classList.add('active');
+    lucide.createIcons();
+
+    // Bind action buttons inside modal
+    deviceDetailContent.querySelectorAll('.detail-action-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const action = btn.getAttribute('data-action');
+        const ip = btn.getAttribute('data-ip');
+        deviceDetailModal.classList.remove('active');
+
+        if (action === 'port-scan') {
+          openPortModal(ip);
+        } else if (action === 'dns') {
+          // Switch to security tab and fill DNS
+          navButtons.forEach(b => b.classList.remove('active'));
+          tabs.forEach(t => t.classList.remove('active'));
+          document.querySelector('[data-tab="security"]').classList.add('active');
+          document.getElementById('tab-security').classList.add('active');
+          dnsLookupTarget.value = ip;
+          fetchHealthScore();
+          fetchNetworkStats();
+          setTimeout(() => dnsLookupBtn.click(), 300);
+        } else if (action === 'traceroute') {
+          navButtons.forEach(b => b.classList.remove('active'));
+          tabs.forEach(t => t.classList.remove('active'));
+          document.querySelector('[data-tab="security"]').classList.add('active');
+          document.getElementById('tab-security').classList.add('active');
+          tracerouteTarget.value = ip;
+          fetchHealthScore();
+          fetchNetworkStats();
+          setTimeout(() => tracerouteBtn.click(), 300);
+        }
+      });
+    });
+  }
+
+  // ─── Enhanced Modal Close Handlers ────────────────────────────────
+  // Close all modals generically
+  document.querySelectorAll('.close-modal').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const targetModalId = btn.getAttribute('data-modal');
+      if (targetModalId) {
+        document.getElementById(targetModalId).classList.remove('active');
+      } else {
+        // Fallback: close parent modal
+        btn.closest('.modal').classList.remove('active');
+      }
+    });
+  });
+
+  window.addEventListener('click', (e) => {
+    if (e.target === portModal) portModal.classList.remove('active');
+    if (e.target === deviceDetailModal) deviceDetailModal.classList.remove('active');
+  });
+
+  // ─── Initialize ───────────────────────────────────────────────────
   fetchNetworkInfo();
   initBandwidthChart();
   renderScanHistory();
-  runNetworkScan();
+  
+  // Connect WebSocket for real-time updates
+  connectWebSocket();
+
+  // Periodically refresh stats when security tab is visible
+  setInterval(() => {
+    if (document.getElementById('tab-security') && document.getElementById('tab-security').classList.contains('active')) {
+      fetchNetworkStats();
+    }
+  }, 10000);
 });
