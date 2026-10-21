@@ -148,6 +148,40 @@ document.addEventListener('DOMContentLoaded', () => {
   // Initialize Lucide icons
   lucide.createIcons();
 
+  // ─── Real-Time Fallback Engine (HTTP Polling) ─────────────────────
+  let httpPollingInterval = null;
+  let isHttpPolling = false;
+
+  function startHttpPolling() {
+    if (httpPollingInterval) return;
+    isHttpPolling = true;
+    console.log('Activating HTTP real-time polling fallback...');
+    
+    setWSStatus(true, 'Live Connected (HTTP)');
+    if (!wsConnectTime) {
+      wsConnectTime = Date.now();
+      startUptimeTimer();
+    }
+    
+    // Immediate scan
+    performScan();
+    
+    // Poll every 5s (matching WebSocket scan loop)
+    httpPollingInterval = setInterval(() => {
+      if (!wsConnected) {
+        performScan();
+      }
+    }, 5000);
+  }
+
+  function stopHttpPolling() {
+    if (httpPollingInterval) {
+      clearInterval(httpPollingInterval);
+      httpPollingInterval = null;
+    }
+    isHttpPolling = false;
+  }
+
   // ─── WebSocket Connection ─────────────────────────────────────────
   function connectWebSocket() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -156,17 +190,18 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       ws = new WebSocket(wsUrl);
     } catch (err) {
-      console.error('WebSocket creation failed:', err);
-      setWSStatus(false);
-      scheduleReconnect();
+      console.warn('WebSocket creation failed, falling back to HTTP polling:', err);
+      wsConnected = false;
+      startHttpPolling();
       return;
     }
 
     ws.onopen = () => {
-      console.log('WebSocket connected');
+      console.log('WebSocket connected successfully');
       wsConnected = true;
       wsConnectTime = Date.now();
-      setWSStatus(true);
+      stopHttpPolling();
+      setWSStatus(true, 'Live Connected');
       startUptimeTimer();
 
       if (reconnectTimeout) {
@@ -185,15 +220,17 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     ws.onclose = () => {
-      console.log('WebSocket disconnected');
+      console.log('WebSocket closed, using HTTP polling fallback');
       wsConnected = false;
-      setWSStatus(false);
-      stopUptimeTimer();
+      startHttpPolling();
       scheduleReconnect();
     };
 
     ws.onerror = (err) => {
-      console.error('WebSocket error:', err);
+      console.warn('WebSocket connection error, activating HTTP polling');
+      if (!wsConnected) {
+        startHttpPolling();
+      }
     };
   }
 
@@ -201,15 +238,18 @@ document.addEventListener('DOMContentLoaded', () => {
     if (reconnectTimeout) return;
     reconnectTimeout = setTimeout(() => {
       reconnectTimeout = null;
-      console.log('Attempting WebSocket reconnect...');
-      connectWebSocket();
-    }, 3000);
+      if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+        console.log('Attempting WebSocket reconnect...');
+        connectWebSocket();
+      }
+    }, 5000);
   }
 
-  function setWSStatus(connected) {
+  function setWSStatus(connected, modeText = 'Live Connected') {
     if (connected) {
       wsStatusDot.className = 'status-dot online';
-      wsStatusText.textContent = 'Live Connected';
+      wsStatusDot.style.background = '';
+      wsStatusText.textContent = modeText;
       livePulse.classList.remove('disconnected');
       liveLabel.classList.remove('disconnected');
       liveLabel.textContent = 'LIVE';
@@ -425,12 +465,14 @@ document.addEventListener('DOMContentLoaded', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mock: isMock })
       });
-      // Reset local state
-      networkEvents = [];
-      renderEventLog();
     } catch (err) {
       console.error('Failed to switch scanner mode:', err);
     }
+    // Reset local state and immediately trigger a fresh scan with the new mode
+    networkEvents = [];
+    previousDeviceIps.clear();
+    renderEventLog();
+    performScan();
   });
 
   // Tab switching logic
@@ -1030,32 +1072,74 @@ document.addEventListener('DOMContentLoaded', () => {
       const response = await fetch(`/api/scan?mock=${isMock}`);
       const data = await response.json();
 
-      if (data.success && data.devices && data.devices.length > 0) {
+      if (data.success && Array.isArray(data.devices)) {
         const currentDeviceIps = new Set(data.devices.map(device => device.ip));
         const newDevices = previousDeviceIps.size ? data.devices.filter(device => !previousDeviceIps.has(device.ip)) : [];
+        const leftDevices = previousDeviceIps.size ? devicesList.filter(device => !currentDeviceIps.has(device.ip)) : [];
+
+        // If in HTTP polling mode (no WebSocket), generate join/leave events & toasts!
+        if (!wsConnected && previousDeviceIps.size > 0) {
+          newDevices.forEach(d => {
+            networkEvents.unshift({
+              type: 'joined',
+              ip: d.ip,
+              vendor: d.vendor,
+              timestamp: new Date().toISOString()
+            });
+            showToast('joined', 'Device Joined', `${d.vendor} (${d.ip})`);
+          });
+          leftDevices.forEach(d => {
+            networkEvents.unshift({
+              type: 'left',
+              ip: d.ip,
+              vendor: d.vendor,
+              timestamp: new Date().toISOString()
+            });
+            showToast('left', 'Device Left', `${d.vendor} (${d.ip})`);
+          });
+          if (newDevices.length > 0 || leftDevices.length > 0) {
+            renderEventLog();
+          }
+        }
+
         devicesList = data.devices;
         previousDeviceIps = currentDeviceIps;
         
         updateDashboardMetrics();
-        renderDeviceTable(getVisibleDevices());
+        renderDeviceTable(getVisibleDevices(), new Set(newDevices.map(d => d.ip)));
         updateCharts(devicesList);
         updateScanAlert(newDevices);
+        liveLastScan.textContent = `Last scan: ${formatTime(new Date())}`;
         
-        scanHistory.unshift({
-          timestamp: new Date().toISOString(),
-          deviceCount: devicesList.length,
-          subnet: currentSubnet.textContent.replace('Subnet Range: ', '')
-        });
-        scanHistory = scanHistory.slice(0, 5);
-        saveScanHistory();
-        renderScanHistory();
+        // Confirm live status in HTTP mode
+        if (!wsConnected) {
+          setWSStatus(true, 'Live Connected (HTTP)');
+          if (!wsConnectTime) {
+            wsConnectTime = Date.now();
+            startUptimeTimer();
+          }
+        }
+
+        if (devicesList.length > 0) {
+          scanHistory.unshift({
+            timestamp: new Date().toISOString(),
+            deviceCount: devicesList.length,
+            subnet: currentSubnet.textContent.replace('Subnet Range: ', '')
+          });
+          scanHistory = scanHistory.slice(0, 5);
+          saveScanHistory();
+          renderScanHistory();
+        }
         
         if (document.getElementById('tab-topology').classList.contains('active')) {
           renderTopologyMap();
         }
       }
     } catch (err) {
-      console.error(err);
+      console.error('Scan error:', err);
+      if (!wsConnected && isHttpPolling) {
+        setWSStatus(false);
+      }
     } finally {
       isScanning = false;
       scanBtn.disabled = false;
@@ -1063,18 +1147,27 @@ document.addEventListener('DOMContentLoaded', () => {
       lucide.createIcons();
     }
   }
+  const performScan = runNetworkScan;
 
   // Render Devices list table with alias inline-editor
   function renderDeviceTable(devices, highlightIps = new Set()) {
     deviceTableBody.innerHTML = '';
     
     if (!devices.length) {
+      const isMock = mockToggle.checked;
       deviceTableBody.innerHTML = `
         <tr>
           <td colspan="7" class="loading-state">
-            <div class="empty-state">
-              <i data-lucide="refresh-cw" class="spinner"></i>
-              <p>Waiting for real-time scan data...</p>
+            <div class="empty-state" style="padding: 2.5rem 1rem;">
+              <i data-lucide="${isMock ? 'refresh-cw' : 'shield-alert'}" class="${isMock ? 'spinner' : ''}" style="width: 38px; height: 38px; color: var(--accent-cyan); margin-bottom: 0.75rem;"></i>
+              <p style="font-weight: 600; font-size: 1.05rem; color: var(--text-primary); margin-bottom: 0.4rem;">
+                ${isMock ? 'Waiting for network scan data...' : 'No active devices detected on this interface'}
+              </p>
+              <p style="font-size: 0.85rem; color: var(--text-muted); max-width: 520px; margin: 0 auto; line-height: 1.5;">
+                ${isMock 
+                  ? 'Click "Force Scan" to refresh devices immediately.' 
+                  : 'Notice: If running on the hosted Vercel website, cloud servers are isolated from your physical Wi-Fi. <strong>Enable Simulator Mode</strong> in the sidebar to test, or run <code>npm start</code> on your computer to scan your real mobile hotspot / Wi-Fi.'}
+              </p>
             </div>
           </td>
         </tr>
@@ -1347,12 +1440,13 @@ document.addEventListener('DOMContentLoaded', () => {
   // ─── Health Score System ───────────────────────────────────────────
   let lastHealthFetch = 0;
   async function fetchHealthScore() {
-    // Throttle: at most once per 3 seconds
-    if (Date.now() - lastHealthFetch < 3000) return;
+    // Throttle: at most once per 2 seconds
+    if (Date.now() - lastHealthFetch < 2000) return;
     lastHealthFetch = Date.now();
 
+    const isMock = mockToggle ? mockToggle.checked : true;
     try {
-      const res = await fetch('/api/health-score');
+      const res = await fetch(`/api/health-score?mock=${isMock}`);
       const data = await res.json();
       if (data.success) {
         // Update dashboard metric card
@@ -1499,8 +1593,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ─── Network Statistics ───────────────────────────────────────────
   async function fetchNetworkStats() {
+    const isMock = mockToggle ? mockToggle.checked : true;
     try {
-      const res = await fetch('/api/stats');
+      const res = await fetch(`/api/stats?mock=${isMock}`);
       const data = await res.json();
       if (data.success) {
         if (statTotalScans) statTotalScans.textContent = data.totalScans || 0;
@@ -1665,7 +1760,11 @@ document.addEventListener('DOMContentLoaded', () => {
   initBandwidthChart();
   renderScanHistory();
   
-  // Connect WebSocket for real-time updates
+  // Immediately trigger initial scan and health score on page load
+  runNetworkScan();
+  fetchHealthScore();
+
+  // Connect WebSocket for real-time updates (falls back to HTTP polling if WS unsupported)
   connectWebSocket();
 
   // Periodically refresh stats when security tab is visible

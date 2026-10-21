@@ -383,7 +383,7 @@ app.get('/api/network-info', (req, res) => {
 
 // One-shot scan (still works for manual triggers)
 app.get('/api/scan', async (req, res) => {
-  const mock = req.query.mock === 'true';
+  const mock = req.query.mock !== undefined ? req.query.mock === 'true' : isMockMode;
 
   if (mock) {
     const mockDevices = runMockScan();
@@ -570,7 +570,11 @@ app.get('/api/traceroute', (req, res) => {
 
 // Network Health Score API
 app.get('/api/health-score', (req, res) => {
-  const devices = Array.from(currentDevices.values());
+  const { mock } = req.query;
+  let devices = Array.from(currentDevices.values());
+  if (devices.length === 0 && (mock === 'true' || isMockMode)) {
+    devices = runMockScan();
+  }
   if (devices.length === 0) {
     return res.json({ success: true, score: 100, breakdown: { latencyScore: 100, reachabilityScore: 100, densityScore: 100 }, grade: 'A+' });
   }
@@ -653,6 +657,11 @@ app.get('/api/dns-lookup', (req, res) => {
 
 // Statistics Summary API
 app.get('/api/stats', (req, res) => {
+  const { mock } = req.query;
+  if (currentDevices.size === 0 && (mock === 'true' || isMockMode)) {
+    const mockList = runMockScan();
+    mockList.forEach(d => currentDevices.set(d.ip, d));
+  }
   let totalLatency = 0;
   let latencyCount = 0;
   
